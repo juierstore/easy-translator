@@ -1,0 +1,73 @@
+{
+  "name": "easy-translator",
+  "productName": "EasyTranslator",
+  "version": "1.0.0",
+  "description": "截图取词翻译 — 框选屏幕区域，原地替换为目标语言",
+  "main": "src/main/index.js",
+  "author": "easy-Translator",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "snap": "electron . --snap",
+    "demo": "electron . --demo",
+    "democap": "electron . --democap",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.easytranslator.desktop",
+    "productName": "EasyTranslator",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "asar": false,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "EasyTranslator",
+      "uninstallDisplayName": "EasyTranslator 截图取词翻译",
+      "artifactName": "EasyTranslator-Setup-${version}.exe",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "EasyTranslator-${version}-portable.exe"
+    },
+    "compression": "normal"
+  }
+}

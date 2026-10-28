@@ -1,0 +1,19 @@
+* text=auto
+
+# 源码统一 LF
+*.js      text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+
+# Windows 脚本保持原样：
+#   ocr-worker.ps1 必须以 UTF-8 BOM 保存，否则中文注释会被 PS 5.1 按 GBK 解析而报错
+*.ps1     -text
+*.cmd     text eol=crlf
+*.bat     text eol=crlf
+
+# 二进制
+*.ico     binary
+*.png     binary
+*.exe     binary

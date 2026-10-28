@@ -1,0 +1,31 @@
+# ---- 依赖 ----
+node_modules/
+
+# ---- 构建产物（安装包体积大，不入库）----
+dist/
+out/
+build/
+.icon-ico/
+*.log
+
+# ---- 本地开发 / 自检产物 ----
+.tmp/
+
+# ---- 用户数据（历史记录、配置、API Key）----
+settings.json
+history/
+*.png.tmp
+
+# ---- 密钥，绝不入库 ----
+.env
+.env.*
+*.pem
+*.key
+secrets.json
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

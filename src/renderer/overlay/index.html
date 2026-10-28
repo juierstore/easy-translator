@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; img-src 'self' data:; style-src 'self' 'unsafe-inline';" />
+  <title>选区</title>
+  <link rel="stylesheet" href="overlay.css" />
+</head>
+<body>
+  <img id="shot" alt="" />
+  <div id="dim"></div>
+  <div id="cross-h" class="cross"></div>
+  <div id="cross-v" class="cross"></div>
+  <div id="sel">
+    <i class="h tl"></i><i class="h tr"></i><i class="h bl"></i><i class="h br"></i>
+  </div>
+  <div id="size"></div>
+  <div id="hint">
+    <span class="k">拖拽</span> 选择要翻译的区域
+    <span class="sep">·</span>
+    <span class="k">Esc</span> 取消
+  </div>
+  <script src="overlay.js"></script>
+</body>
+</html>
