@@ -53,7 +53,7 @@
 需要 Node.js 18+（开发时使用 Node 24）。
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/juierstore/easy-translator.git
 cd easy-translator
 npm install
 
