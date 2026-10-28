@@ -248,6 +248,7 @@ function fillLangSelects() {
   build($('#trSrc'), { withAuto: true, value: 'auto' });
   build($('#trTgt'), { withAuto: false, value: settings.targetLang || 'zh-CN' });
   build($('#targetLang'), { withAuto: false, value: settings.targetLang || 'zh-CN' });
+  build($('#srcLang'), { withAuto: true, value: settings.srcLang || 'en' });
 }
 
 et.translate.onDelta(({ id, full }) => {
@@ -345,7 +346,7 @@ async function loadSettingsUI() {
   $('#hotkey').value = settings.hotkey || '';
   $('#hkHint').textContent = settings.hotkey || '';
   $('#targetLang').value = settings.targetLang || 'zh-CN';
-  $('#ocrLang').value = settings.ocrLang || 'auto';
+  $('#srcLang').value = settings.srcLang || 'en';
   $('#ocrUpscale').value = String(settings.ocrUpscale || 2);
   $('#historyLimit').value = String(settings.historyLimit || 300);
   $('#closeOnBlur').checked = !!settings.closeOnBlur;
@@ -410,7 +411,7 @@ $('#btnTestKey').addEventListener('click', async () => {
 $('#baseUrl').addEventListener('change', () => patch({ baseUrl: $('#baseUrl').value.trim() }));
 $('#model').addEventListener('change', () => patch({ model: $('#model').value.trim() }));
 $('#targetLang').addEventListener('change', () => patch({ targetLang: $('#targetLang').value }));
-$('#ocrLang').addEventListener('change', () => patch({ ocrLang: $('#ocrLang').value }));
+$('#srcLang').addEventListener('change', () => patch({ srcLang: $('#srcLang').value }));
 $('#ocrUpscale').addEventListener('change', () => patch({ ocrUpscale: Number($('#ocrUpscale').value) }));
 $('#historyLimit').addEventListener('change', () => patch({ historyLimit: Number($('#historyLimit').value) }));
 $('#closeOnBlur').addEventListener('change', () => patch({ closeOnBlur: $('#closeOnBlur').checked }));

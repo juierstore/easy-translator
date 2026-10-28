@@ -199,6 +199,7 @@ async function runDemoCapture() {
 
     await capture.onSelection({
       scale, px,
+      winX: display.bounds.x, winY: display.bounds.y,
       displayX: display.bounds.x, displayY: display.bounds.y,
       imageDataUrl, pxW: px.w, pxH: px.h
     }, { silent: true });
@@ -338,7 +339,18 @@ function registerIpc() {
   });
 
   ipcMain.handle('overlay:select', async (ev, payload) => {
-    await capture.onSelection(payload);
+    // 以窗口真实位置为准换算屏幕坐标，避免窗口被系统挪动时结果层错位
+    let winX = payload && payload.winX;
+    let winY = payload && payload.winY;
+    try {
+      const entry = capture.overlays.get(ev.sender.id);
+      if (entry && entry.win && !entry.win.isDestroyed()) {
+        const b = entry.win.getBounds();
+        winX = b.x;
+        winY = b.y;
+      }
+    } catch { }
+    await capture.onSelection({ ...payload, winX, winY });
     return { ok: true };
   });
 

@@ -38,9 +38,15 @@ function langShort(code) {
 
 function render() {
   if (!session) return;
-  srcLabel.textContent = langShort(session.srcLang);
+  // 自动模式下把识别到的语言一并显示出来，避免"选了自动却看到中文"的困惑
+  if (session.srcAuto) {
+    const d = session.srcLang && session.srcLang !== 'auto' ? langShort(session.srcLang) : '';
+    srcLabel.textContent = d ? `自动 · ${d}` : '自动';
+  } else {
+    srcLabel.textContent = langShort(session.srcLang);
+  }
   tgtLabel.textContent = langShort(session.targetLang);
-  srcBtn.classList.toggle('active', session.srcLang === 'auto');
+  srcBtn.classList.toggle('active', !!session.srcAuto);
   compareBtn.classList.toggle('on', !!session.compare);
   origBtn.classList.toggle('on', !!session.showOriginal);
   origLabel.textContent = session.showOriginal ? '译文' : '原图';
@@ -60,7 +66,9 @@ function buildMenu(el, which) {
   for (const l of langs) {
     const d = document.createElement('div');
     d.className = 'item';
-    const cur = which === 'source' ? session.srcLang : session.targetLang;
+    const cur = which === 'source'
+      ? (session.srcAuto ? 'auto' : session.srcLang)
+      : session.targetLang;
     if (l.code === cur) d.classList.add('sel');
     const name = document.createElement('span');
     name.textContent = l.name;

@@ -49,14 +49,31 @@ class CaptureController {
   /** 渲染进程画完首帧后显示，避免白闪 */
   showOverlay(webContentsId) {
     const entry = this.overlays.get(webContentsId);
-    console.log('[capture] overlay ready ->', webContentsId, !!entry);
     if (!entry) return;
+    if (this.overlayShown.has(webContentsId)) return;   // 幂等：看门狗与 ready 只会生效一次
     const win = entry.win;
+    const target = entry.display.bounds;
     try {
       if (win.isDestroyed()) return;
+      // 显式钉住全屏尺寸：Windows 有时会在 show 时把窗口压到工作区高度，
+      // 那会导致截图被纵向压扁（任务栏出现在画面中间、选区垂直偏移）
+      win.setBounds(target);
       win.showInactive();
       win.setAlwaysOnTop(true, 'screen-saver');
       win.focus();
+      this.overlayShown.add(webContentsId);
+      clearTimeout(this._watchdog);
+
+      setTimeout(() => {
+        try {
+          if (win.isDestroyed()) return;
+          const b = win.getBounds();
+          if (b.x !== target.x || b.y !== target.y || b.width !== target.width || b.height !== target.height) {
+            console.warn('[capture] overlay 尺寸被系统修正，重新设置', JSON.stringify(b), '->', JSON.stringify(target));
+            win.setBounds(target);
+          }
+        } catch { }
+      }, 120);
     } catch { }
   }
 
@@ -72,11 +89,14 @@ class CaptureController {
       const maxW = Math.max(800, ...displays.map((d) => Math.round(d.bounds.width * d.scaleFactor)));
       const maxH = Math.max(600, ...displays.map((d) => Math.round(d.bounds.height * d.scaleFactor)));
 
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: maxW, height: maxH },
-        fetchWindowIcons: false
-      });
+      const sources = await Promise.race([
+        desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: maxW, height: maxH },
+          fetchWindowIcons: false
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('截屏超时，请重试')), 8000))
+      ]);
 
       console.log('[capture] displays=', displays.map((d) => `${d.id}:${d.bounds.width}x${d.bounds.height}@${d.scaleFactor}`).join(' '));
       console.log('[capture] sources=', sources.length, sources.map((s) => `${s.display_id}:${s.thumbnail.getSize().width}x${s.thumbnail.getSize().height}`).join(' '));
@@ -112,14 +132,40 @@ class CaptureController {
         win.webContents.once('did-finish-load', () => {
           send(win, 'overlay:data', this.overlayPayloads.get(key));
         });
+        win.webContents.on('did-fail-load', () => {
+          console.error('[capture] overlay 渲染失败');
+          this.cancelSelection();
+        });
+        win.webContents.on('render-process-gone', () => {
+          console.error('[capture] overlay 进程崩溃');
+          this.cancelSelection();
+        });
         win.on('closed', () => {
           this.overlays.delete(key);
           this.overlayPayloads.delete(key);
         });
+
+        // 每一块屏幕各自兜底：万一某个渲染进程没回报 ready，也照样显示
+        setTimeout(() => {
+          if (!this.overlayShown.has(key) && this.overlays.has(key)) {
+            console.warn('[capture] overlay 无响应，兜底显示', key);
+            this.showOverlay(key);
+          }
+        }, 2500);
       }
 
       if (!this.overlays.size) throw new Error('无法创建选区窗口');
       this.active = true;
+
+      // 看门狗：渲染进程万一没回报 ready，也不能让用户卡在"窗口没了、画面也没暗"的状态
+      clearTimeout(this._watchdog);
+      this._watchdog = setTimeout(() => {
+        if (!this.overlays.size) return;
+        if (this.overlayShown.size === 0) {
+          console.warn('[capture] overlay 未就绪，强制显示');
+          for (const id of this.overlays.keys()) this.showOverlay(id);
+        }
+      }, 2000);
     } catch (e) {
       console.error('[capture] start failed', e);
       this.busy = false;
@@ -136,9 +182,11 @@ class CaptureController {
 
   cancelSelection() {
     this.active = false;
+    clearTimeout(this._watchdog);
     wins.destroyOverlays();
     this.overlays.clear();
     this.overlayPayloads.clear();
+    this.overlayShown.clear();
     const mw = this.mainWindowGetter && this.mainWindowGetter();
     if (this.restoreMain && mw) mw.show();
     this.restoreMain = false;
@@ -149,14 +197,17 @@ class CaptureController {
   async onSelection(payload, opts = {}) {
     if (this.session) return;
     try {
+      clearTimeout(this._watchdog);
       wins.destroyOverlays();
       this.active = false;
 
-      const { scale, px, displayX, displayY, imageDataUrl, pxW, pxH } = payload;
+      const { scale, px, imageDataUrl, pxW, pxH } = payload;
       if (!px || px.w < 2 || px.h < 2) { this.cancelSelection(); return; }
 
-      const dipX = displayX + px.x / scale;
-      const dipY = displayY + px.y / scale;
+      // 以选区窗口的"真实"位置换算屏幕坐标，而不是假设窗口一定贴在显示器原点，
+      // 这样即使窗口被系统挪动/缩放，结果层也能精确落在用户框选的位置上
+      const dipX = payload.winX + px.x / scale;
+      const dipY = payload.winY + px.y / scale;
       const dipW = px.w / scale;
       const dipH = px.h / scale;
 
@@ -171,10 +222,16 @@ class CaptureController {
       const base64 = String(imageDataUrl).replace(/^data:image\/png;base64,/, '');
       const pngBuffer = Buffer.from(base64, 'base64');
 
+      const ocrBase64 = payload.ocrImageDataUrl
+        ? String(payload.ocrImageDataUrl).replace(/^data:image\/png;base64,/, '')
+        : base64;
+
       await this.startSession({
         rect, display, scale,
-        pxW: px.w, pxH: px.h,
+        pxW, pxH,
         imageDataUrl, pngBuffer,
+        ocrPngBuffer: Buffer.from(ocrBase64, 'base64'),
+        ocrPad: payload.ocrPad || { x: 0, y: 0 },
         silent: opts.silent
       });
     } catch (e) {
@@ -184,7 +241,8 @@ class CaptureController {
   }
 
   /** 会话主体：建立结果层/工具条并跑识别翻译流程（截屏与 demo 共用） */
-  async startSession({ rect, display, scale, pxW, pxH, imageDataUrl, pngBuffer, targetLang, silent }) {
+  async startSession({ rect, display, scale, pxW, pxH, imageDataUrl, pngBuffer, ocrPngBuffer, ocrPad, targetLang, silent }) {
+    const srcPref = this.settings.data.srcLang || 'en';
     this.session = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       ts: new Date().toISOString(),
@@ -195,7 +253,10 @@ class CaptureController {
       pxH,
       imageDataUrl,
       pngBuffer,
-      srcLang: this.settings.data.ocrLang === 'auto' ? 'auto' : normalizeOcrLang(this.settings.data.ocrLang),
+      ocrPngBuffer: ocrPngBuffer || pngBuffer,
+      ocrPad: ocrPad || { x: 0, y: 0 },
+      srcLang: srcPref,
+      srcAuto: srcPref === 'auto',
       targetLang: targetLang || this.settings.data.targetLang || 'zh-CN',
       status: 'ocr',           // ocr | translating | ready | empty | error
       error: '',
@@ -247,6 +308,7 @@ class CaptureController {
       pxH: s.pxH,
       rect: s.rect,
       srcLang: s.srcLang,
+      srcAuto: s.srcAuto,
       targetLang: s.targetLang,
       status: s.status,
       error: s.error,
@@ -264,6 +326,7 @@ class CaptureController {
     return {
       id: s.id,
       srcLang: s.srcLang,
+      srcAuto: s.srcAuto,
       targetLang: s.targetLang,
       status: s.status,
       error: s.error,
@@ -293,14 +356,15 @@ class CaptureController {
 
     try {
       fs.mkdirSync(tmpDir, { recursive: true });
-      fs.writeFileSync(tmpFile, s.pngBuffer);
+      // OCR 用"外扩"过的图（边缘文字需要上下文），坐标事后减回选区原点
+      fs.writeFileSync(tmpFile, s.ocrPngBuffer || s.pngBuffer);
 
       this.setStatus('ocr');
-      const wantedOcr = s.srcLang === 'auto' ? 'auto' : (this.settings.data.ocrLang === 'auto' ? 'auto' : s.srcLang);
-      const ocrLang = s.srcLang === 'auto' ? 'auto' : (s.srcLang === 'zh-TW' ? 'zh-Hans-CN' : s.srcLang === 'zh-CN' ? 'zh-Hans-CN' : s.srcLang);
+      const ocrLang = s.srcAuto ? 'auto' : (s.srcLang || 'auto');
+      const pad = s.ocrPad || { x: 0, y: 0 };
 
       ocrResult = await this.ocr.recognize(tmpFile, {
-        lang: s.srcLang === 'auto' ? 'auto' : ocrLang,
+        lang: ocrLang,
         upscale: this.settings.data.ocrUpscale || 2
       });
 
@@ -308,12 +372,24 @@ class CaptureController {
 
       const lines = (ocrResult.lines || []).map((l) => ({
         text: l.text,
-        x: l.x, y: l.y, w: l.w, h: l.h
-      }));
+        x: l.x - pad.x, y: l.y - pad.y, w: l.w, h: l.h
+      })).filter((l) => {
+        // 只保留与选区真正有交集的文本（外扩区带进来的邻行丢掉）
+        return l.x + l.w > -2 && l.y + l.h > -2 && l.x < s.pxW + 2 && l.y < s.pxH + 2;
+      });
       s.lines = lines;
 
       const detected = normalizeOcrLang(ocrResult.lang);
-      if (s.srcLang === 'auto') s.srcLang = detected !== 'auto' ? detected : 'auto';
+      if (s.srcAuto) {
+        // 自动模式：语言以识别出的文本为准
+        s.srcLang = detected !== 'auto' ? detected : (s.srcLang === 'auto' ? 'en' : s.srcLang);
+      } else if (!s.srcUserPicked && ((detected === 'zh-CN' && s.srcLang === 'en') || (detected === 'en' && s.srcLang === 'zh-CN'))) {
+        // 手动指定了语言，但画面其实是另一种：以实际识别结果为准，避免整段翻错
+        console.warn('[capture] 源语言修正:', s.srcLang, '->', detected);
+        s.srcLang = detected;
+        s.langCorrected = true;
+      }
+      s.detectedLang = detected;
 
       const rawBlocks = groupLines(lines);
       if (!rawBlocks.length) {
@@ -431,18 +507,27 @@ class CaptureController {
 
       case 'setLang': {
         const { which, code } = arg || {};
-        if (which === 'target' && code && code !== s.targetLang) {
+        if (!code) return { ok: false };
+
+        if (which === 'target') {
+          if (code === s.targetLang) return { ok: true };
           s.targetLang = code;
-          this.settings.patch({ targetLang: code });
+          this.settings.patch({ targetLang: code });   // 记住，下次不用再选
           this.broadcast();
           await this.retranslate();
-          return { ok: true };
+          return { ok: true, targetLang: code };
         }
-        if (which === 'source' && code && code !== s.srcLang) {
-          s.srcLang = code;
+
+        if (which === 'source') {
+          const nextAuto = (code === 'auto');
+          if (!nextAuto && code === s.srcLang && s.srcAuto === false) return { ok: true };
+          s.srcAuto = nextAuto;
+          s.srcUserPicked = true;   // 用户亲手选过，就不再自动纠正
+          s.srcLang = nextAuto ? 'auto' : code;
+          this.settings.patch({ srcLang: code });      // 源语言同样持久化
           this.broadcast();
           await this.retranslate({ reOcr: true });
-          return { ok: true };
+          return { ok: true, srcLang: s.srcLang, srcAuto: s.srcAuto };
         }
         return { ok: true };
       }
@@ -536,6 +621,7 @@ class CaptureController {
   closeSession() {
     if (this._closingSession) return;
     this._closingSession = true;
+    clearTimeout(this._watchdog);
     try {
       this.session = null;
       const rw = this.resultWin; this.resultWin = null;

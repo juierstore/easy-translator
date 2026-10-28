@@ -308,8 +308,23 @@ function draw() {
     const boxW = Math.min(Math.max(b.w, maxLineW) + space.padX * 2, W - boxX);
     const textH = fit.lines.length * fit.lh;
     const contentH = textH + origH;
-    const boxY = Math.max(0, b.y - padY);
-    const boxH = Math.min(Math.max(contentH + padY * 2, b.h + padY * 2), H - boxY);
+
+    // 贴近画面底部的块：空间不够时整体上移，避免最后一行被画布裁掉
+    const needH = Math.max(contentH + padY * 2, b.h + padY * 2);
+    let boxY = Math.max(0, b.y - padY);
+    if (boxY + needH > H) {
+      const prevBottom = (() => {
+        let v = 0;
+        for (let j = 0; j < blocks.length; j++) {
+          if (j === idx) continue;
+          const o = blocks[j];
+          if (o.y + o.h <= b.y + 1) v = Math.max(v, o.y + o.h);
+        }
+        return v + 2;
+      })();
+      boxY = Math.max(prevBottom, Math.min(boxY, H - needH));
+    }
+    const boxH = Math.min(needH, H - boxY);
 
     const centerDiff = Math.abs((b.x + b.w / 2) - W / 2);
     const alignCenter = centerDiff < W * 0.055;

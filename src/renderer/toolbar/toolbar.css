@@ -52,8 +52,10 @@ button {
   background: rgba(255, 255, 255, 0.055);
   border: 1px solid rgba(255, 255, 255, 0.06);
   color: #cdd7e8;
-  max-width: 132px;
+  max-width: 170px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chip:hover { background: rgba(255, 255, 255, 0.1); color: #eaf0fb; }
 .chip.strong { color: #a9c8ff; border-color: rgba(96, 165, 250, 0.28); background: rgba(96, 165, 250, 0.10); }

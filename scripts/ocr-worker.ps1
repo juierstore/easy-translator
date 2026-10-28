@@ -233,6 +233,66 @@ function Convert-Lines($lines, [double]$scale) {
     return $out
 }
 
+# ---------------- 语种判定 ----------------
+function Get-ScriptStats([string]$text) {
+    $cjk = 0; $latin = 0; $kana = 0; $hangul = 0; $other = 0; $total = 0
+    if ([string]::IsNullOrEmpty($text)) {
+        return @{ cjk = 0; latin = 0; kana = 0; hangul = 0; other = 0; total = 0 }
+    }
+    foreach ($ch in $text.ToCharArray()) {
+        $c = [int]$ch
+        if ($c -eq 32 -or $c -eq 10 -or $c -eq 13 -or $c -eq 9) { continue }
+        $total++
+        if ($c -ge 0x3040 -and $c -le 0x30ff) { $kana++ }
+        elseif ($c -ge 0xac00 -and $c -le 0xd7af) { $hangul++ }
+        elseif (($c -ge 0x3400 -and $c -le 0x9fff) -or ($c -ge 0xf900 -and $c -le 0xfaff)) { $cjk++ }
+        elseif ((($c -ge 0x41 -and $c -le 0x5a)) -or (($c -ge 0x61 -and $c -le 0x7a))) { $latin++ }
+        elseif ($c -gt 0x7e) { $other++ }
+    }
+    return @{ cjk = $cjk; latin = $latin; kana = $kana; hangul = $hangul; other = $other; total = $total }
+}
+
+# 语言由识别出的文本本身决定，避免"中文引擎读英文 → 判成中文"这类误判
+function Get-LangFromText([string]$text) {
+    $s = Get-ScriptStats $text
+    if ($s.total -eq 0) { return 'auto' }
+    if ($s.kana -ge 3) { return 'ja' }
+    if ($s.hangul -ge 3) { return 'ko' }
+    if (($s.cjk / $s.total) -ge 0.10) { return 'zh-CN' }
+    if (($s.latin / $s.total) -ge 0.45) { return 'en' }
+    return 'auto'
+}
+
+# 语言码 -> Windows OCR 引擎语言标签
+function Get-EngineTagFor([string]$code) {
+    switch ($code) {
+        'en'    { return 'en-US' }
+        'zh-CN' { return 'zh-Hans-CN' }
+        'zh-TW' { return 'zh-Hans-CN' }
+        'ja'    { return 'ja-JP' }
+        'ko'    { return 'ko-KR' }
+        'ru'    { return 'ru-RU' }
+        'fr'    { return 'fr-FR' }
+        'de'    { return 'de-DE' }
+        'es'    { return 'es-ES' }
+        'it'    { return 'it-IT' }
+        'pt'    { return 'pt-BR' }
+        default { return 'zh-Hans-CN' }
+    }
+}
+
+# 拉丁文本质量：真实英文的词较长、单字符词很少；乱码往往是 "EE AE i" 这种
+function Measure-TokenQuality([string]$text) {
+    $tokens = @($text -split '\s+' | Where-Object { $_ -ne '' })
+    if ($tokens.Count -eq 0) { return @{ tokens = 0; avgLen = 0; single = 1.0 } }
+    $sum = 0; $single = 0
+    foreach ($t in $tokens) {
+        $sum += $t.Length
+        if ($t.Length -le 1) { $single++ }
+    }
+    return @{ tokens = $tokens.Count; avgLen = ($sum / $tokens.Count); single = ($single / $tokens.Count) }
+}
+
 # ---------------- 就绪握手 ----------------
 $avail = @()
 try { foreach ($l in [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages) { $avail += $l.LanguageTag } } catch { }
@@ -273,21 +333,61 @@ while ($true) {
             $scale = $rz.scale
         }
 
-        $primary = 'zh-Hans-CN'
-        if ($want -ne 'auto') { $primary = $want }
+        # ---- 引擎选择 ----
+        # auto: 先用中英混合能力最强的中文引擎；若结果几乎不含中日韩字符，
+        #       说明画面是拉丁文本，再换英文引擎重识别（英文引擎对拉丁字形更准）
+        if ($want -eq 'auto') {
+            $res = Invoke-Ocr $ocrPath 'zh-Hans-CN'
+            $joined = ($res.lines | ForEach-Object { $_.text }) -join "`n"
+            $stat = Get-ScriptStats $joined
 
-        $res = Invoke-Ocr $ocrPath $primary
-        $usedLang = $res.lang
+            $needLatin = ($joined.Trim().Length -eq 0) -or ($stat.cjk -lt 2) -or (($stat.cjk / [Math]::Max($stat.total, 1)) -lt 0.06)
+            if ($needLatin) {
+                try {
+                    $alt = Invoke-Ocr $ocrPath 'en-US'
+                    $altJoined = ($alt.lines | ForEach-Object { $_.text }) -join "`n"
+                    $altStat = Get-ScriptStats $altJoined
+                    # 英文引擎读出的拉丁字符更多，或中文引擎基本没读到东西，则采用英文结果
+                    if ($altJoined.Trim().Length -gt 0 -and
+                        (($joined.Trim().Length -eq 0) -or ($altStat.latin -gt $stat.latin))) {
+                        $res = $alt
+                        $joined = $altJoined
+                    }
+                } catch { }
+            }
+            $engineTag = $res.lang
+            # 语言由"识别出的文本"决定，而不是由引擎决定
+            $detected = Get-LangFromText $joined
+        } else {
+            $engineTag = (Get-EngineTagFor $want)
+            $res = Invoke-Ocr $ocrPath $engineTag
+            $joined = ($res.lines | ForEach-Object { $_.text }) -join "`n"
+            $detected = Get-LangFromText $joined
 
-        $joined = ($res.lines | ForEach-Object { $_.text }) -join "`n"
-        if ($want -eq 'auto' -and $joined.Trim().Length -gt 0 -and -not (Test-CjkText $joined)) {
-            try {
-                $alt = Invoke-Ocr $ocrPath 'en-US'
-                $altJoined = ($alt.lines | ForEach-Object { $_.text }) -join "`n"
-                if ($altJoined.Trim().Length -ge $joined.Trim().Length) {
-                    $res = $alt; $usedLang = $alt.lang; $joined = $altJoined
+            # 指定英文时：若英文引擎读出来的是"乱码感"的拉丁串（多半其实是中文画面），
+            # 再用中文引擎试一次；真读出中文就切过去，避免把中文当英文去翻译
+            if ($want -eq 'en') {
+                $stat = Get-ScriptStats $joined
+                $q = Measure-TokenQuality $joined
+                $latinRatio = $stat.latin / [Math]::Max($stat.total, 1)
+                # 非 ASCII 杂字符 = 很可能把中文硬读成了乱码，此时必须拿中文引擎复核
+                $suspicious = ($stat.other -gt 0)
+                $confident = ($joined.Trim().Length -ge 3) -and ($latinRatio -gt 0.70) -and
+                             ($q.avgLen -ge 3.2) -and ($q.single -lt 0.35)
+                if ($suspicious -or (-not $confident)) {
+                    try {
+                        $alt = Invoke-Ocr $ocrPath 'zh-Hans-CN'
+                        $altText = ($alt.lines | ForEach-Object { $_.text }) -join "`n"
+                        $altStat = Get-ScriptStats $altText
+                        if ($altStat.cjk -ge 4) {
+                            $res = $alt
+                            $joined = $altText
+                            $engineTag = $alt.lang
+                            $detected = Get-LangFromText $altText
+                        }
+                    } catch { }
                 }
-            } catch { }
+            }
         }
 
         $finalLines = Convert-Lines $res.lines $scale
@@ -298,7 +398,8 @@ while ($true) {
         Write-JsonLine @{
             ok      = $true
             id      = $id
-            lang    = $usedLang
+            lang    = $detected
+            engine  = $engineTag
             text    = $finalText
             width   = [Math]::Round($res.width / $scale, 1)
             height  = [Math]::Round($res.height / $scale, 1)

@@ -10,15 +10,12 @@ const DEFAULTS = {
   baseUrl: 'https://api.deepseek.com',
   model: 'deepseek-chat',
   provider: 'deepseek',        // deepseek | free
+  srcLang: 'en',               // auto | en | zh-CN | ...
   targetLang: 'zh-CN',
-  ocrLang: 'auto',             // auto | zh-Hans-CN | en-US
   ocrUpscale: 2,
-  fontSizeBias: 1,             // 译文自适应字号的整体缩放
   keepHistory: true,
   historyLimit: 300,
-  closeOnBlur: true,
-  launchAtLogin: false,
-  showToolbarShadow: true
+  closeOnBlur: true
 };
 
 class Settings {

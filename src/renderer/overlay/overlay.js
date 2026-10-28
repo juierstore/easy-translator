@@ -60,6 +60,7 @@ function applyData(d) {
   scale = d.scale || 1;
   if (shot.getAttribute('src') !== d.imageDataUrl) {
     shot.onload = () => onImageReady();
+    shot.onerror = () => onImageReady();
     shot.src = d.imageDataUrl;
     if (shot.complete && shot.naturalWidth > 0) onImageReady();
   } else if (shot.complete && shot.naturalWidth > 0) {
@@ -73,6 +74,16 @@ function onImageReady() {
   try { window.etOverlay.ready(); } catch { }
 }
 
+/** 从整屏截图里裁一块出来 */
+function cropDataUrl(x, y, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(shot, x, y, w, h, 0, 0, w, h);
+  return c.toDataURL('image/png');
+}
+
 async function submit(r) {
   if (submitting || !data) return;
   submitting = true;
@@ -84,33 +95,44 @@ async function submit(r) {
   const w = Math.max(2, Math.min(r.w, vw - x));
   const h = Math.max(2, Math.min(r.h, vh - y));
 
-  const pxX = Math.round(x * scale);
-  const pxY = Math.round(y * scale);
-  const pxW = Math.max(2, Math.min(Math.round(w * scale), (data.pxW || vw) - pxX));
-  const pxH = Math.max(2, Math.min(Math.round(h * scale), (data.pxH || vh) - pxY));
+  // 关键：X / Y 分开换算。即使窗口被系统压扁或拉伸，也不会算错裁剪区域
+  const natW = shot.naturalWidth || data.pxW || vw;
+  const natH = shot.naturalHeight || data.pxH || vh;
+  const sx = natW / vw;
+  const sy = natH / vh;
 
-  const canvas = document.createElement('canvas');
-  canvas.width = pxW;
-  canvas.height = pxH;
-  const ctx = canvas.getContext('2d', { willReadFrequently: false });
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(shot, pxX, pxY, pxW, pxH, 0, 0, pxW, pxH);
-  const imageDataUrl = canvas.toDataURL('image/png');
+  const pxX = Math.max(0, Math.round(x * sx));
+  const pxY = Math.max(0, Math.round(y * sy));
+  const pxW = Math.max(2, Math.min(Math.round(w * sx), natW - pxX));
+  const pxH = Math.max(2, Math.min(Math.round(h * sy), natH - pxY));
+
+  // 给 OCR 多留一圈上下文：贴着选区边缘的文字，OCR 需要周围像素才认得出
+  const padX = Math.round(12 * sx);
+  const padY = Math.round(12 * sy);
+  const ex0 = Math.max(0, pxX - padX);
+  const ey0 = Math.max(0, pxY - padY);
+  const ex1 = Math.min(natW, pxX + pxW + padX);
+  const ey1 = Math.min(natH, pxY + pxH + padY);
+
+  const imageDataUrl = cropDataUrl(pxX, pxY, pxW, pxH);
+  const ocrImageDataUrl = cropDataUrl(ex0, ey0, ex1 - ex0, ey1 - ey0);
 
   selEl.style.borderColor = 'rgba(96,165,250,1)';
   hintEl.classList.add('hide');
 
   try {
     await window.etOverlay.select({
-      scale,
+      scale: sx,
       px: { x: pxX, y: pxY, w: pxW, h: pxH },
+      winX: window.screenX,
+      winY: window.screenY,
       displayX: data.displayX,
       displayY: data.displayY,
-      displayW: data.displayW,
-      displayH: data.displayH,
-      pxW: data.pxW,
-      pxH: data.pxH,
-      imageDataUrl
+      pxW: natW,
+      pxH: natH,
+      imageDataUrl,
+      ocrImageDataUrl,
+      ocrPad: { x: pxX - ex0, y: pxY - ey0 }
     });
   } catch { }
 }
@@ -172,3 +194,13 @@ window.addEventListener('mouseout', () => {
 window.etOverlay.init().then(applyData).catch(() => { });
 window.etOverlay.onData(applyData);
 window.focus();
+
+// 兜底 1：无论图片是否解码成功，1 秒内都要让窗口显示出来
+setTimeout(onImageReady, 1000);
+
+// 兜底 2：拿不到截图数据就主动退出，别留一个透明空窗口把主界面藏了
+setTimeout(() => {
+  if (!data && !submitting) {
+    try { window.etOverlay.cancel(); } catch { }
+  }
+}, 2500);

@@ -1,7 +1,7 @@
 {
   "name": "easy-translator",
   "productName": "EasyTranslator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "截图取词翻译 — 框选屏幕区域，原地替换为目标语言",
   "main": "src/main/index.js",
   "author": "easy-Translator",
